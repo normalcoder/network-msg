@@ -18,7 +18,9 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Unsafe as BU
 import Data.Maybe (isNothing, fromJust)
 import Network.Socket
-import Network.Socket.Internal (peekSockAddr,pokeSockAddr,sizeOfSockAddr,throwSocketErrorWaitRead,throwSocketErrorWaitWrite)
+-- import Network.Socket.Internal (peekSockAddr,pokeSockAddr,sizeOfSockAddr,throwSocketErrorWaitRead,throwSocketErrorWaitWrite)
+import Network.Socket.Types (peekSockAddr,pokeSockAddr,sizeOfSockAddr)
+import Network.Socket.Internal (throwSocketErrorWaitRead,throwSocketErrorWaitWrite)
 import Foreign.Marshal.Alloc (allocaBytes)
 import Foreign.Storable (Storable(..),poke)
 import Foreign.Ptr (Ptr,castPtr,plusPtr,nullPtr)
@@ -44,7 +46,8 @@ The buffer in both functions is filled as follows:
 -- |Sends the data contained in the bytestring to the specified address.
 -- The last argument is a list of control parameters (see cmsg(3) for details).
 sendMsg :: Socket -> B.ByteString -> SockAddr -> [CMsg] -> IO ()
-sendMsg sock@(MkSocket sockfd _ _ _ _) bytes sa cmsgs = void $ allocaBytes bufSz $ \bufPtr -> do
+-- sendMsg sock@(MkSocket sockfd _ _ _ _) bytes sa cmsgs = void $ allocaBytes bufSz $ \bufPtr -> do
+sendMsg sock bytes sa cmsgs = void $ allocaBytes bufSz $ \bufPtr -> do
         let saPtr = castPtr bufPtr
         let iovPtr = plusPtr saPtr $ sizeOfSockAddr sa
         let msgPtr = plusPtr iovPtr $ sizeOf (undefined :: IOVec)
@@ -63,15 +66,17 @@ sendMsg sock@(MkSocket sockfd _ _ _ _) bytes sa cmsgs = void $ allocaBytes bufSz
 # if !defined(__HUGS__) 
         throwSocketErrorWaitWrite sock "sendMsg" $
 # endif
-            BU.unsafeUseAsCStringLen bytes $ \(p,len) ->
-                poke iovPtr (IOVec p $ fromIntegral len) >> c_sendmsg sockfd msgPtr 0
+            withFdSocket sock $ \sockfd -> do
+                BU.unsafeUseAsCStringLen bytes $ \(p,len) ->
+                    poke iovPtr (IOVec p $ fromIntegral len) >> c_sendmsg sockfd msgPtr 0
     where
         auxSz = sum $ map cmsgSpace cmsgs
         bufSz = sum [auxSz, sizeOfSockAddr sa, sizeOf (undefined :: MsgHdr), sizeOf (undefined :: IOVec)]
 
 -- |Receive data and put it into a bytestring.
 recvMsg :: Socket -> Int -> IO (B.ByteString, SockAddr, [CMsg])
-recvMsg sock@(MkSocket sockfd _ _ _ _) sz = allocaBytes bufSz $ \bufPtr -> do
+-- recvMsg sock@(MkSocket sockfd _ _ _ _) sz = allocaBytes bufSz $ \bufPtr -> do
+recvMsg sock sz = allocaBytes bufSz $ \bufPtr -> do
         let addrPtr = plusPtr bufPtr sz
         let iovPtr = plusPtr addrPtr addrSz
         let mhdrPtr = plusPtr iovPtr (sizeOf (undefined :: IOVec))
@@ -92,7 +97,8 @@ recvMsg sock@(MkSocket sockfd _ _ _ _) sz = allocaBytes bufSz $ \bufPtr -> do
 # if !defined(__HUGS__) 
             throwSocketErrorWaitRead sock "recvMsg" $
 # endif
-            c_recvmsg sockfd mhdrPtr 0)
+            withFdSocket sock $ \sockfd -> do
+                c_recvmsg sockfd mhdrPtr 0)
         (,,) <$> B.packCStringLen (bufPtr,rsz)
              <*> peekSockAddr addrPtr
              <*> extractCMsgs mhdrPtr
